@@ -128,7 +128,7 @@ function get_human_time_from_sec($seconds)
 {
     $interval = new DateInterval("PT{$seconds}S");
     $now = new DateTimeImmutable('now', new DateTimeZone('utc'));
-    return $now->diff($now->add($interval))->format('%a:%h:%i');
+    return $now->diff($now->add($interval))->format('%ad %hh %im');
 }
 
 function send_phpmailer($email, $subject, $message)
