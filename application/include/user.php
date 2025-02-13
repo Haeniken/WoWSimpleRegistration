@@ -1,13 +1,11 @@
 <?php
 /**
  * @author Amin Mahmoudi (MasterkinG)
- * @copyright    Copyright (c) 2019 - 2021, MasterkinG32. (https://masterking32.com)
+ * @copyright    Copyright (c) 2019 - 2024, MasterkinG32. (https://masterking32.com)
  * @link    https://masterking32.com
- * @Description : It's not masterking32 framework !
  **/
 
 use Gregwar\Captcha\CaptchaBuilder;
-use Medoo\Medoo;
 
 class user
 {
@@ -58,13 +56,12 @@ class user
      */
     public static function lang_cookie_changer($getlang)
     {
-		$supported_langs = get_config('supported_langs');
-		if(!empty($supported_langs) && !empty($supported_langs[$getlang]))
-		{
-			setcookie('website_lang', $getlang); //sets the language cookie to selected language
-			header("location: " . get_config("baseurl"));
-			exit();
-		}
+        $supported_langs = get_config('supported_langs');
+        if (!empty($supported_langs) && !empty($supported_langs[$getlang])) {
+            setcookie('website_lang', $getlang); //sets the language cookie to selected language
+            header("location: " . get_config("baseurl"));
+            exit();
+        }
     }
 
     /**
@@ -92,9 +89,17 @@ class user
             return false;
         }
 
-        if (!(strlen($_POST['password']) >= 4 && strlen($_POST['password']) <= 16)) {
-            error_msg(lang('passwords_length'));
-            return false;
+        if(get_config('srp6_support') && get_config('srp6_version') == 2) {
+            if (!(strlen($_POST['password']) >= 4 && strlen($_POST['password']) <= 128)) {
+                error_msg(lang('passwords_length'));
+                return false;
+            }
+        }
+        else {
+            if (!(strlen($_POST['password']) >= 4 && strlen($_POST['password']) <= 16)) {
+                error_msg(lang('passwords_length'));
+                return false;
+            }
         }
 
         if (!self::check_email_exists(strtoupper($_POST["email"]))) {
@@ -102,47 +107,110 @@ class user
             return false;
         }
 
-        if (empty(get_config('srp6_support'))) {
-            $bnet_hashed_pass = strtoupper(bin2hex(strrev(hex2bin(strtoupper(hash('sha256', strtoupper(hash('sha256', strtoupper($_POST['email'])) . ':' . strtoupper($_POST['password']))))))));
-            database::$auth->insert('battlenet_accounts', [
-                'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
-                'sha_pass_hash' => $antiXss->xss_clean($bnet_hashed_pass)
-            ]);
+        if (empty(get_config('soap_for_register'))) {
+            if (empty(get_config('srp6_support'))) {
+                $bnet_hashed_pass = strtoupper(bin2hex(strrev(hex2bin(strtoupper(hash('sha256', strtoupper(hash('sha256', strtoupper($_POST['email'])) . ':' . strtoupper($_POST['password']))))))));
+                database::$auth->insert('battlenet_accounts', [
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'sha_pass_hash' => $antiXss->xss_clean($bnet_hashed_pass),
+                ]);
 
-            $bnet_account_id = database::$auth->id();
-            $username = $bnet_account_id . '#1';
-            $hashed_pass = strtoupper(sha1(strtoupper($username . ':' . $_POST['password'])));
-            database::$auth->insert('account', [
-                'username' => $antiXss->xss_clean(strtoupper($username)),
-                'sha_pass_hash' => $antiXss->xss_clean($hashed_pass),
-                'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
-                'expansion' => $antiXss->xss_clean(get_config('expansion')),
-                'battlenet_account' => $bnet_account_id,
-                'battlenet_index' => 1
-            ]);
-            success_msg(lang('account_created'));
-            return true;
+                $bnet_account_id = database::$auth->lastInsertId();
+                $username = $bnet_account_id . '#1';
+                $hashed_pass = strtoupper(sha1(strtoupper($username . ':' . $_POST['password'])));
+                database::$auth->insert('account', [
+                    'username' => $antiXss->xss_clean(strtoupper($username)),
+                    'sha_pass_hash' => $antiXss->xss_clean($hashed_pass),
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'expansion' => $antiXss->xss_clean(get_config('expansion')),
+                    'battlenet_account' => $bnet_account_id,
+                    'battlenet_index' => 1,
+                ]);
+                success_msg(lang('account_created'));
+                return true;
+            }
+            
+            if(get_config('srp6_version') == 0) {
+                list($salt, $verifier) = getRegistrationData(strtoupper($_POST['username']), $_POST['password']);
+                $bnet_hashed_pass = strtoupper(bin2hex(strrev(hex2bin(strtoupper(hash('sha256', strtoupper(hash('sha256', strtoupper($_POST['email'])) . ':' . strtoupper($_POST['password']))))))));
+                database::$auth->insert('battlenet_accounts', [
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'sha_pass_hash' => $antiXss->xss_clean($bnet_hashed_pass),
+                ]);
+                
+                $bnet_account_id = database::$auth->lastInsertId();
+                $username = $bnet_account_id . '#1';
+                database::$auth->insert('account', [
+                    'username' => $antiXss->xss_clean(strtoupper($username)),
+                    get_core_config("salt_field") => $salt,
+                    get_core_config("verifier_field") => $verifier,
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'expansion' => $antiXss->xss_clean(get_config('expansion')),
+                    'battlenet_account' => $bnet_account_id,
+                    'battlenet_index' => 1,
+                ]);
+                success_msg(lang('account_created'));
+                return true;
+            }
+            
+            if(get_config('srp6_version') == 1) {
+                list($salt, $verifier) = getRegistrationDataBnetV1(strtoupper($_POST['email']), $_POST['password']);
+                database::$auth->insert('battlenet_accounts', [
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'srp_version' => 1,
+                    get_core_config("salt_field") => $salt,
+                    get_core_config("verifier_field") => $verifier,
+                ]);
+                
+                $bnet_account_id = database::$auth->lastInsertId();
+                $game_account_name = $bnet_account_id . '#1';
+                list($game_account_salt, $game_account_verifier) = getRegistrationData($game_account_name, $_POST['password']);
+                database::$auth->insert('account', [
+                    'username' => $antiXss->xss_clean($game_account_name),
+                    get_core_config("salt_field") => $game_account_salt,
+                    get_core_config("verifier_field") => $game_account_verifier,
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'expansion' => $antiXss->xss_clean(get_config('expansion')),
+                    'battlenet_account' => $bnet_account_id,
+                    'battlenet_index' => 1,
+                ]);
+                success_msg(lang('account_created'));
+                return true;
+            }
+            
+            if(get_config('srp6_version') == 2) {
+                list($salt, $verifier) = getRegistrationDataBnetV2(strtoupper($_POST['email']), $_POST['password']);
+                database::$auth->insert('battlenet_accounts', [
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'srp_version' => 2,
+                    get_core_config("salt_field") => $salt,
+                    get_core_config("verifier_field") => $verifier,
+                ]);
+                
+                $bnet_account_id = database::$auth->lastInsertId();
+                $game_account_name = $bnet_account_id . '#1';
+                list($game_account_salt, $game_account_verifier) = getRegistrationData($game_account_name, substr($_POST['password'], 0, 16));
+                database::$auth->insert('account', [
+                    'username' => $antiXss->xss_clean($game_account_name),
+                    get_core_config("salt_field") => $game_account_salt,
+                    get_core_config("verifier_field") => $game_account_verifier,
+                    'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
+                    'expansion' => $antiXss->xss_clean(get_config('expansion')),
+                    'battlenet_account' => $bnet_account_id,
+                    'battlenet_index' => 1,
+                ]);
+                success_msg(lang('account_created'));
+                return true;
+            }
         }
 
-        list($salt, $verifier) = getRegistrationData(strtoupper($_POST['username']), $_POST['password']);
-        $bnet_hashed_pass = strtoupper(bin2hex(strrev(hex2bin(strtoupper(hash('sha256', strtoupper(hash('sha256', strtoupper($_POST['email'])) . ':' . strtoupper($_POST['password']))))))));
-        database::$auth->insert('battlenet_accounts', [
-            'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
-            'sha_pass_hash' => $antiXss->xss_clean($bnet_hashed_pass)
-        ]);
-		
-        $bnet_account_id = database::$auth->id();
-        $username = $bnet_account_id . '#1';
-        database::$auth->insert('account', [
-            'username' => $antiXss->xss_clean(strtoupper($username)),
-            get_core_config("salt_field") => $salt,
-            get_core_config("verifier_field") => $verifier,
-            'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
-            'expansion' => $antiXss->xss_clean(get_config('expansion')),
-            'battlenet_account' => $bnet_account_id,
-            'battlenet_index' => 1
-        ]);
-        success_msg(lang('account_created'));
+        $command = str_replace('{USERNAME}', $antiXss->xss_clean($_POST['email']), get_config('soap_ca_command'));
+        $command = str_replace('{PASSWORD}', $antiXss->xss_clean($_POST['password']), $command);
+        if (RemoteCommandWithSOAP($command)) {
+            success_msg(lang('account_created'));
+        } else {
+            error_msg(lang('error_try_again'));
+        }
         return true;
     }
 
@@ -204,7 +272,7 @@ class user
                     'sha_pass_hash' => $antiXss->xss_clean($hashed_pass),
                     'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
                     //'reg_mail' => $antiXss->xss_clean(strtoupper($_POST['email'])),
-                    'expansion' => $antiXss->xss_clean(get_config('expansion'))
+                    'expansion' => $antiXss->xss_clean(get_config('expansion')),
                 ]);
                 success_msg(lang('account_created'));
                 return true;
@@ -217,7 +285,7 @@ class user
                 get_core_config("verifier_field") => $verifier,
                 'email' => $antiXss->xss_clean(strtoupper($_POST['email'])),
                 //'reg_mail' => $antiXss->xss_clean(strtoupper($_POST['email'])),
-                'expansion' => $antiXss->xss_clean(get_config('expansion'))
+                'expansion' => $antiXss->xss_clean(get_config('expansion')),
             ]);
             success_msg(lang('account_created'));
             return true;
@@ -233,9 +301,13 @@ class user
                 RemoteCommandWithSOAP($command_addon);
             }
 
-            database::$auth->update('account', [
-                'email' => $antiXss->xss_clean(strtoupper($_POST['email']))
-            ], ['username' => Medoo::raw('UPPER(:username)', [':username' => $antiXss->xss_clean(strtoupper($_POST['username']))])]);
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->update('account')
+                ->set('email', ':email')
+                ->where('username = :username')
+                ->setParameter('email', $antiXss->xss_clean(strtoupper($_POST['email'])))
+                ->setParameter('username', $antiXss->xss_clean(strtoupper($_POST['username'])));
+            $queryBuilder->executeQuery();
 
             success_msg(lang('account_created'));
         } else {
@@ -276,13 +348,27 @@ class user
             return false;
         }
 
-        if (!(strlen($_POST['password']) >= 4 && strlen($_POST['password']) <= 16)) {
-            error_msg(lang('passwords_length'));
-            return true;
+        if(get_config('srp6_support') && get_config('srp6_version') == 2) {
+            if (!(strlen($_POST['password']) >= 4 && strlen($_POST['password']) <= 128)) {
+                error_msg(lang('passwords_length'));
+                return false;
+            }
+        }
+        else {
+            if (!(strlen($_POST['password']) >= 4 && strlen($_POST['password']) <= 16)) {
+                error_msg(lang('passwords_length'));
+                return false;
+            }
         }
 
         $userinfo = self::get_user_by_email(strtoupper($_POST['email']));
-        if (empty($userinfo['username'])) {
+        if ((empty(get_config('srp6_support')) && empty($userinfo['username'])) || (!empty(get_config('srp6_support')) && (get_config('srp6_version') == 0) && empty($userinfo['username']))) {
+            error_msg(lang('email_not_correct'));
+            return false;
+        }
+
+        $bnetAccountInfo = self::get_bnetaccount_by_email(strtoupper($_POST['email']));
+        if (empty($bnetAccountInfo['email']) && !empty(get_config('srp6_support')) && (get_config('srp6_version') > 0)) {
             error_msg(lang('email_not_correct'));
             return false;
         }
@@ -296,36 +382,113 @@ class user
                 return false;
             }
 
-            database::$auth->update('account', [
-                'sha_pass_hash' => $antiXss->xss_clean($hashed_pass),
-                'sessionkey' => '',
-                'v' => '',
-                's' => ''
-            ], [
-                'id[=]' => $userinfo['id']
-            ]);
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->update('account')
+                ->set('sha_pass_hash', ':sha_pass_hash')
+                ->set('sessionkey', '')
+                ->set('v', '')
+                ->set('s', '')
+                ->where('id = :id')
+                ->setParameter('sha_pass_hash', $antiXss->xss_clean($hashed_pass))
+                ->setParameter('id', $userinfo['id']);
+            $queryBuilder->executeQuery();
+
+            $bnet_hashed_pass = strtoupper(bin2hex(strrev(hex2bin(strtoupper(hash('sha256', strtoupper(hash('sha256', strtoupper($userinfo['email'])) . ':' . strtoupper($_POST['password']))))))));
+
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->update('battlenet_accounts')
+                ->set('sha_pass_hash', ':sha_pass_hash')
+                ->set('sessionkey', '')
+                ->set('v', '')
+                ->set('s', '')
+                ->where('id = :id')
+                ->setParameter('sha_pass_hash', $antiXss->xss_clean($bnet_hashed_pass))
+                ->setParameter('id', $userinfo['battlenet_account']);
+            $queryBuilder->executeQuery();
         } else {
-            if (!verifySRP6($userinfo['username'], $_POST['old_password'], $userinfo[get_core_config("salt_field")], $userinfo[get_core_config("verifier_field")])) {
+            if (get_config('srp6_version') == 0) {
+                if (!verifySRP6($userinfo['username'], $_POST['old_password'], $userinfo[get_core_config("salt_field")], $userinfo[get_core_config("verifier_field")])) {
                 error_msg(lang('old_password_not_valid'));
                 return false;
+                }
+                
+                list($salt, $verifier) = getRegistrationData(strtoupper($userinfo['username']), $_POST['password']);
+                
+                $queryBuilder = database::$auth->createQueryBuilder();
+                $queryBuilder->update('account')
+                    ->set(get_core_config("salt_field"), ':salt')
+                    ->set(get_core_config("verifier_field"), ':verifier')
+                    ->where('id = :id')
+                    ->setParameter('salt', $salt)
+                    ->setParameter('verifier', $verifier)
+                    ->setParameter('id', $userinfo['id']);
+                $queryBuilder->executeQuery();
             }
+            if (get_config('srp6_version') == 1) {
+                if (!verifySRP6BnetV1($bnetAccountInfo['email'], $_POST['old_password'], $bnetAccountInfo[get_core_config("salt_field")], $bnetAccountInfo[get_core_config("verifier_field")])) {
+                    error_msg(lang('old_password_not_valid'));
+                    return false;
+                }
 
-            list($salt, $verifier) = getRegistrationData(strtoupper($userinfo['username']), $_POST['password']);
-            database::$auth->update('account', [
-                get_core_config("salt_field") => $salt,
-                get_core_config("verifier_field") => $verifier
-            ], [
-                'id[=]' => $userinfo['id']
-            ]);
+                $game_account_name = $bnetAccountInfo['id'] . '#1';
+                list($salt, $verifier) = getRegistrationData($game_account_name, substr($_POST['password'], 0, 16));
+                
+                $queryBuilder = database::$auth->createQueryBuilder();
+                $queryBuilder->update('account')
+                    ->set(get_core_config("salt_field"), ':salt')
+                    ->set(get_core_config("verifier_field"), ':verifier')
+                    ->where('email = :email')
+                    ->setParameter('salt', $salt)
+                    ->setParameter('verifier', $verifier)
+                    ->setParameter('email', $bnetAccountInfo['email']);
+                $queryBuilder->executeQuery();
+                
+                list($salt, $verifier) = getRegistrationDataBnetV1($bnetAccountInfo['email'], $_POST['password']);
+                
+                $queryBuilder = database::$auth->createQueryBuilder();
+                $queryBuilder->update('battlenet_accounts')
+                    ->set('srp_version', 1)
+                    ->set(get_core_config("salt_field"), ':salt')
+                    ->set(get_core_config("verifier_field"), ':verifier')
+                    ->where('id = :id')
+                    ->setParameter('salt', $salt)
+                    ->setParameter('verifier', $verifier)
+                    ->setParameter('id', $bnetAccountInfo['id']);
+                $queryBuilder->executeQuery();
+            }
+            if (get_config('srp6_version') == 2) {
+                if (!verifySRP6BnetV2($bnetAccountInfo['email'], $_POST['old_password'], $bnetAccountInfo[get_core_config("salt_field")], $bnetAccountInfo[get_core_config("verifier_field")])) {
+                    error_msg($bnetAccountInfo[get_core_config("salt_field")]);
+                    return false;
+                }
+                
+                $game_account_name = $bnetAccountInfo['id'] . '#1';
+                list($salt, $verifier) = getRegistrationData($game_account_name, substr($_POST['password'], 0, 16));
+                
+                $queryBuilder = database::$auth->createQueryBuilder();
+                $queryBuilder->update('account')
+                    ->set(get_core_config("salt_field"), ':salt')
+                    ->set(get_core_config("verifier_field"), ':verifier')
+                    ->where('email = :email')
+                    ->setParameter('salt', $salt)
+                    ->setParameter('verifier', $verifier)
+                    ->setParameter('email', $bnetAccountInfo['email']);
+                $queryBuilder->executeQuery();
+                
+                list($salt, $verifier) = getRegistrationDataBnetV2($bnetAccountInfo['email'], $_POST['password']);
+                
+                $queryBuilder = database::$auth->createQueryBuilder();
+                $queryBuilder->update('battlenet_accounts')
+                    ->set('srp_version', 2)
+                    ->set(get_core_config("salt_field"), ':salt')
+                    ->set(get_core_config("verifier_field"), ':verifier')
+                    ->where('id = :id')
+                    ->setParameter('salt', $salt)
+                    ->setParameter('verifier', $verifier)
+                    ->setParameter('id', $bnetAccountInfo['id']);
+                $queryBuilder->executeQuery();
+            }
         }
-
-        $bnet_hashed_pass = strtoupper(bin2hex(strrev(hex2bin(strtoupper(hash('sha256', strtoupper(hash('sha256', strtoupper($userinfo['email'])) . ':' . strtoupper($_POST['password']))))))));
-
-        database::$auth->update('battlenet_accounts', [
-            'sha_pass_hash' => $antiXss->xss_clean($bnet_hashed_pass)
-        ], [
-            'id[=]' => $userinfo['battlenet_account']
-        ]);
 
         success_msg(lang('password_changed'));
         return true;
@@ -367,7 +530,6 @@ class user
             return false;
         }
 
-
         if (empty(get_config('srp6_support'))) {
             $Old_hashed_pass = strtoupper(sha1(strtoupper($userinfo['username'] . ':' . $_POST['old_password'])));
             $hashed_pass = strtoupper(sha1(strtoupper($userinfo['username'] . ':' . $_POST['password'])));
@@ -376,14 +538,16 @@ class user
                 return false;
             }
 
-            database::$auth->update('account', [
-                'sha_pass_hash' => $antiXss->xss_clean($hashed_pass),
-                'sessionkey' => '',
-                'v' => '',
-                's' => ''
-            ], [
-                'id[=]' => $userinfo['id']
-            ]);
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->update('account')
+                ->set('sha_pass_hash', ':sha_pass_hash')
+                ->set('sessionkey', '')
+                ->set('v', '')
+                ->set('s', '')
+                ->where('id = :id')
+                ->setParameter('sha_pass_hash', $antiXss->xss_clean($hashed_pass))
+                ->setParameter('id', $userinfo['id']);
+            $queryBuilder->executeQuery();
         } else {
             if (!verifySRP6($userinfo['username'], $_POST['old_password'], $userinfo[get_core_config("salt_field")], $userinfo[get_core_config("verifier_field")])) {
                 error_msg(lang('old_password_not_valid'));
@@ -391,12 +555,16 @@ class user
             }
 
             list($salt, $verifier) = getRegistrationData(strtoupper($userinfo['username']), $_POST['password']);
-            database::$auth->update('account', [
-                get_core_config("salt_field") => $salt,
-                get_core_config("verifier_field") => $verifier
-            ], [
-                'id[=]' => $userinfo['id']
-            ]);
+
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->update('account')
+                ->set(get_core_config("salt_field"), ':salt')
+                ->set(get_core_config("verifier_field"), ':verifier')
+                ->where('id = :id')
+                ->setParameter('salt', $salt)
+                ->setParameter('verifier', $verifier)
+                ->setParameter('id', $userinfo['id']);
+            $queryBuilder->executeQuery();
         }
 
         success_msg(lang('password_changed'));
@@ -457,11 +625,14 @@ class user
         }
 
         $restore_key = strtolower(md5(time() . mt_rand(1000, 9999)) . mt_rand(10000, 99999));
-        database::$auth->update('account', [
-            'restore_key' => $antiXss->xss_clean($restore_key)
-        ], [
-            'id[=]' => $userinfo['id']
-        ]);
+
+        $queryBuilder = database::$auth->createQueryBuilder();
+        $queryBuilder->update('account')
+            ->set('restore_key', ':restore_key')
+            ->where('id = :id')
+            ->setParameter('restore_key', $antiXss->xss_clean($restore_key))
+            ->setParameter('id', $userinfo['id']);
+        $queryBuilder->executeQuery();
 
         $restorepass_URL = get_config('baseurl') . '/index.php?restore=' . strtolower($field_acc) . '&key=' . $restore_key;
         $message = "For restore you game account open <a href='$restorepass_URL' target='_blank'>this link</a>: <BR>$restorepass_URL";
@@ -510,66 +681,85 @@ class user
             $message = 'Your new account information : <br>Email: ' . strtolower($userinfo['email']) . '<br>Password: ' . $new_password;
             if (empty(get_config('srp6_support'))) {
                 $hashed_pass = strtoupper(sha1(strtoupper($userinfo['username'] . ':' . $new_password)));
-                database::$auth->update('account', [
-                    'sha_pass_hash' => $antiXss->xss_clean($hashed_pass),
-                    'sessionkey' => '',
-                    'v' => '',
-                    's' => '',
-                    'restore_key' => '1'
-                ], [
-                    'id[=]' => $userinfo['id']
-                ]);
+
+                $queryBuilder = database::$auth->createQueryBuilder();
+                $queryBuilder->update('account')
+                    ->set('sha_pass_hash', ':sha_pass_hash')
+                    ->set('sessionkey', '')
+                    ->set('v', '')
+                    ->set('s', '')
+                    ->set('restore_key', '1')
+                    ->where('id = :id')
+                    ->setParameter('sha_pass_hash', $antiXss->xss_clean($hashed_pass))
+                    ->setParameter('id', $userinfo['id']);
+                $queryBuilder->executeQuery();
             } else {
                 list($salt, $verifier) = getRegistrationData(strtoupper($userinfo['username']), $new_password);
-                database::$auth->update('account', [
-                    get_core_config("salt_field") => $salt,
-                    get_core_config("verifier_field") => $verifier,
-                    'restore_key' => '1'
-                ], [
-                    'id[=]' => $userinfo['id']
-                ]);
+
+                $queryBuilder = database::$auth->createQueryBuilder();
+                $queryBuilder->update('account')
+                    ->set(get_core_config("salt_field"), ':salt')
+                    ->set(get_core_config("verifier_field"), ':verifier')
+                    ->set('restore_key', '1')
+                    ->where('id = :id')
+                    ->setParameter('salt', $salt)
+                    ->setParameter('verifier', $verifier)
+                    ->setParameter('id', $userinfo['id']);
+                $queryBuilder->executeQuery();
             }
 
             $bnet_hashed_pass = strtoupper(bin2hex(strrev(hex2bin(strtoupper(hash('sha256', strtoupper(hash('sha256', strtoupper($userinfo['email'])) . ':' . strtoupper($new_password))))))));
-            database::$auth->update('battlenet_accounts', [
-                'sha_pass_hash' => $antiXss->xss_clean($bnet_hashed_pass)
-            ], [
-                'id[=]' => $userinfo['battlenet_account']
-            ]);
+
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->update('battlenet_accounts')
+                ->set('sha_pass_hash', ':sha_pass_hash')
+                ->where('id = :id')
+                ->setParameter('sha_pass_hash', $antiXss->xss_clean($bnet_hashed_pass))
+                ->setParameter('id', $userinfo['battlenet_account']);
+            $queryBuilder->executeQuery();
         } else {
             $message = 'Your new account information : <br>Username: ' . strtolower($userinfo['username']) . '<br>Password: ' . $new_password;
             if (empty(get_config('soap_for_register'))) {
                 if (empty(get_config('srp6_support'))) {
                     $hashed_pass = strtoupper(sha1(strtoupper($userinfo['username'] . ':' . $new_password)));
-                    database::$auth->update('account', [
-                        'sha_pass_hash' => $antiXss->xss_clean($hashed_pass),
-                        'sessionkey' => '',
-                        'v' => '',
-                        's' => '',
-                        'restore_key' => '1'
-                    ], [
-                        'id[=]' => $userinfo['id']
-                    ]);
+
+                    $queryBuilder = database::$auth->createQueryBuilder();
+                    $queryBuilder->update('account')
+                        ->set('sha_pass_hash', ':sha_pass_hash')
+                        ->set('sessionkey', '')
+                        ->set('v', '')
+                        ->set('s', '')
+                        ->set('restore_key', '1')
+                        ->where('id = :id')
+                        ->setParameter('sha_pass_hash', $antiXss->xss_clean($hashed_pass))
+                        ->setParameter('id', $userinfo['id']);
+                    $queryBuilder->executeQuery();
                 } else {
                     list($salt, $verifier) = getRegistrationData(strtoupper($userinfo['username']), $new_password);
-                    database::$auth->update('account', [
-                        get_core_config("salt_field") => $salt,
-                        get_core_config("verifier_field") => $verifier,
-                        'restore_key' => '1'
-                    ], [
-                        'id[=]' => $userinfo['id']
-                    ]);
+
+                    $queryBuilder = database::$auth->createQueryBuilder();
+                    $queryBuilder->update('account')
+                        ->set(get_core_config("salt_field"), ':salt')
+                        ->set(get_core_config("verifier_field"), ':verifier')
+                        ->set('restore_key', '1')
+                        ->where('id = :id')
+                        ->setParameter('salt', $salt)
+                        ->setParameter('verifier', $verifier)
+                        ->setParameter('id', $userinfo['id']);
+                    $queryBuilder->executeQuery();
                 }
             } else {
                 $command = str_replace('{USERNAME}', $antiXss->xss_clean(strtoupper($userinfo['username'])), get_config('soap_cp_command'));
                 $command = str_replace('{PASSWORD}', $antiXss->xss_clean($new_password), $command);
                 if (RemoteCommandWithSOAP($command)) {
                     success_msg(lang('password_changed'));
-                    database::$auth->update('account', [
-                        'restore_key' => '1'
-                    ], [
-                        'id[=]' => $userinfo['id']
-                    ]);
+
+                    $queryBuilder = database::$auth->createQueryBuilder();
+                    $queryBuilder->update('account')
+                        ->set('restore_key', '1')
+                        ->where('id = :id')
+                        ->setParameter('id', $userinfo['id']);
+                    $queryBuilder->executeQuery();
                 } else {
                     error_msg(lang('error_try_again'));
                     return false;
@@ -582,11 +772,18 @@ class user
         return false;
     }
 
-    public
-    static function check_email_exists($email)
+    public static function check_email_exists($email)
     {
         if (!empty($email)) {
-            $datas = database::$auth->select('account', ['id'], ['email' => Medoo::raw('UPPER(:email)', [':email' => $email])]);
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->select('id')
+                ->from('account')
+                ->where('email = :email')
+                ->setParameter('email', strtoupper($email));
+
+            $statement = $queryBuilder->executeQuery();
+            $datas = $statement->fetchAllAssociative();
+
             if (empty($datas[0])) {
                 return true;
             }
@@ -594,11 +791,18 @@ class user
         return false;
     }
 
-    public
-    static function get_user_by_email($email)
+    public static function get_user_by_email($email)
     {
         if (!empty($email)) {
-            $datas = database::$auth->select('account', '*', ['email' => Medoo::raw('UPPER(:email)', [':email' => strtoupper($email)])]);
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->select('*')
+                ->from('account')
+                ->where('email = :email')
+                ->setParameter('email', strtoupper($email));
+
+            $statement = $queryBuilder->executeQuery();
+            $datas = $statement->fetchAllAssociative();
+
             if (!empty($datas[0]['username'])) {
                 return $datas[0];
             }
@@ -606,11 +810,36 @@ class user
         return false;
     }
 
-    public
-    static function get_user_by_username($username)
+    public static function get_bnetaccount_by_email($email)
+    {
+        if (!empty($email)) {
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->select('*')
+                ->from('battlenet_accounts')
+                ->where('email = :email')
+                ->setParameter('email', strtoupper($email));
+
+            $statement = $queryBuilder->executeQuery();
+            $datas = $statement->fetchAllAssociative();
+
+            if (!empty($datas[0]['email'])) {
+                return $datas[0];
+            }
+        }
+        return false;
+    }
+
+    public static function get_user_by_username($username)
     {
         if (!empty($username)) {
-            $datas = database::$auth->select('account', '*', ['username' => Medoo::raw('UPPER(:username)', [':username' => strtoupper($username)])]);
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->select('*')
+                ->from('account')
+                ->where('username = :username')
+                ->setParameter('username', strtoupper($username));
+
+            $statement = $queryBuilder->executeQuery();
+            $datas = $statement->fetchAllAssociative();
             if (!empty($datas[0]['username'])) {
                 return $datas[0];
             }
@@ -622,11 +851,18 @@ class user
      * @param $username
      * @return bool
      */
-    public
-    static function check_username_exists($username)
+    public static function check_username_exists($username)
     {
         if (!empty($username)) {
-            $datas = database::$auth->select('account', ['id'], ['username' => Medoo::raw('UPPER(:username)', [':username' => $username])]);
+            $queryBuilder = database::$auth->createQueryBuilder();
+            $queryBuilder->select('id')
+                ->from('account')
+                ->where('username = :username')
+                ->setParameter('username', strtoupper($username));
+
+            $statement = $queryBuilder->executeQuery();
+            $datas = $statement->fetchAllAssociative();
+
             if (empty($datas[0])) {
                 return true;
             }
@@ -634,30 +870,43 @@ class user
         return false;
     }
 
-    public
-    static function get_online_players($realmID)
+    public static function get_online_players($realmID)
     {
-        $datas = database::$chars[$realmID]->select('characters', array('name', 'race', 'class', 'gender', 'level'), ['LIMIT' => 49, 'ORDER' => ['level' => 'DESC'], 'online[=]' => 1]);
+        $queryBuilder = database::$chars[$realmID]->createQueryBuilder();
+        $queryBuilder->select('name, race, class, gender, level')
+            ->from('characters')
+            ->where('online = :online')
+            ->orderBy('level', 'DESC')
+            ->setMaxResults(49)
+            ->setParameter('online', 1);
+
+        $statement = $queryBuilder->executeQuery();
+        $datas = $statement->fetchAllAssociative();
+
         if (!empty($datas[0]['name'])) {
             return $datas;
         }
         return false;
     }
 
-    public
-    static function get_online_players_count($realmID)
+    public static function get_online_players_count($realmID)
     {
-        $datas = database::$chars[$realmID]->count('characters', ['online[=]' => 1]);
+        $queryBuilder = database::$chars[$realmID]->createQueryBuilder();
+        $queryBuilder->select('COUNT(*)')
+            ->from('characters')
+            ->where('online = :online')
+            ->setParameter('online', 1);
+        $statement = $queryBuilder->executeQuery();
+        $datas = $statement->fetchOne();
         if (!empty($datas)) {
             return $datas;
         }
         return 0;
     }
 
-    public
-    static function add_password_key_to_acctbl()
+    public static function add_password_key_to_acctbl()
     {
-        database::$auth->query("ALTER TABLE `account` ADD COLUMN `restore_key` varchar(255) NULL DEFAULT '1';");
+        database::$auth->executeQuery("ALTER TABLE `account` ADD COLUMN `restore_key` varchar(255) NULL DEFAULT '1';");
         return true;
     }
 
@@ -698,11 +947,13 @@ class user
             self::add_password_key_to_acctbl();
         }
 
-        database::$auth->update('account', [
-            'restore_key' => $antiXss->xss_clean($verify_key)
-        ], [
-            'id[=]' => $userinfo['id']
-        ]);
+        $queryBuilder = database::$auth->createQueryBuilder();
+        $queryBuilder->update('account')
+            ->set('restore_key', ':restore_key')
+            ->where('id = :id')
+            ->setParameter('restore_key', $antiXss->xss_clean($verify_key))
+            ->setParameter('id', $userinfo['id']);
+        $queryBuilder->executeQuery();
 
         $account = $userinfo['email'];
         if (empty(get_config('battlenet_support'))) {
@@ -760,11 +1011,12 @@ class user
         $ga = new PHPGangsta_GoogleAuthenticator();
         $tfa_key = $ga->createSecret();
 
-        database::$auth->update('account', [
-            'restore_key' => '1'
-        ], [
-            'id[=]' => $userinfo['id']
-        ]);
+        $queryBuilder = database::$auth->createQueryBuilder();
+        $queryBuilder->update('account')
+            ->set('restore_key', '1')
+            ->where('id = :id')
+            ->setParameter('id', $userinfo['id']);
+        $queryBuilder->executeQuery();
 
         $command = str_replace('{USERNAME}', $antiXss->xss_clean(strtoupper($userinfo['username'])), get_config('soap_2d_command'));
         RemoteCommandWithSOAP($command);
